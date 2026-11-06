@@ -50,6 +50,22 @@ def load_all():
 
 df = load_all()
 
+opciones = {
+    "Último mes": 1,
+    "Últimos 3 meses": 3,
+    "Últimos 6 meses": 6,
+    "Último año": 12,
+    "Todo el período": None,
+}
+periodo = st.selectbox("Período", list(opciones.keys()), index=2)
+meses = opciones[periodo]
+
+if meses is None:
+    dff = df
+else:
+    corte = df["Fecha"].max() - pd.DateOffset(months=meses)
+    dff = df[df["Fecha"] > corte]
+
 tab1, tab2 = st.tabs(["🏠 Resumen", "📊 Detalle por sitio"])
 
 with tab1:
@@ -82,7 +98,7 @@ with tab1:
 
 with tab2:
     sitio = st.selectbox("Elige un humedal", sorted(df["Sitio"].unique()))
-    sd = df[df["Sitio"] == sitio].sort_values("Fecha").set_index("Fecha")
+    sd = dff[dff["Sitio"] == sitio].sort_values("Fecha").set_index("Fecha")
 
     st.subheader(f"Parámetros físico-químicos – {sitio}")
     g1, g2, g3 = st.columns(3)
