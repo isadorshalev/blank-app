@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
-import altair as alt
+import pydeck as pdk
+import plotly.express as px
+import math
 
 st.set_page_config(page_title="Red de Monitoreo de Humedales", page_icon="🌿", layout="wide")
 
@@ -121,7 +123,7 @@ ICONOS = {"Bueno": "🟢", "Moderado": "🟠", "Malo": "🔴", "Sin datos": "⚪
 df = load_all()
 dfc = load_coli()
 
-tab1, tab2 = st.tabs(["🏠 Resumen", "📊 Detalle por sitio"])
+tab1, tab2 = st.tabs(["Resumen", "Detalle por sitio"])
 
 with tab1:
     st.subheader("Indicadores clave (promedio)")
@@ -170,7 +172,38 @@ with tab1:
     if puntos.empty:
         st.info("Agrega las coordenadas en COORDS para ver el mapa.")
     else:
-        st.map(puntos, latitude="lat", longitude="lon", size=60)
+        capa = pdk.Layer(
+            "ScatterplotLayer",
+            data=puntos,
+            get_position="[lon, lat]",
+            get_radius=120,
+            radius_min_pixels=7,
+            get_fill_color=[47, 107, 79, 210],
+            pickable=True,
+        )
+        etiquetas = pdk.Layer(
+            "TextLayer",
+            data=puntos,
+            get_position="[lon, lat]",
+            get_text="Sitio",
+            get_size=14,
+            get_color=[27, 42, 51, 255],
+            get_pixel_offset=[0, -16],
+        )
+        vista = pdk.ViewState(
+            latitude=puntos["lat"].mean(),
+            longitude=puntos["lon"].mean(),
+            zoom=11,
+        )
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[capa, etiquetas],
+                initial_view_state=vista,
+                tooltip={"text": "{Sitio}"},
+                map_style="light",
+            ),
+            use_container_width=True,
+        )
 with tab2:
     opciones = {
         "Último mes": 1,
@@ -222,7 +255,37 @@ with tab2:
     if sc.empty:
         st.info("No hay datos bacteriológicos para este sitio en el período elegido.")
     else:
-        st.bar_chart(sc.set_index("Fecha")["E.coli"])
+        graf = sc[sc["E.coli"] > 0].copy()
+        if len(graf) < len(sc):
+            st.caption("Los valores de 0 no se pueden mostrar en escala logarítmica.")
+
+        graf["Calidad"] = graf["E.coli"].apply(clasificar)
+
+        tope = max(graf["E.coli"].max() if not graf.empty else 0, 1000)
+
+        fig = px.bar(
+            graf, x="Fecha", y="E.coli", log_y=True,
+            color="Calidad",
+            color_discrete_map={"Bueno": "#2E8B57",
+                                "Moderado": "#E0A030",
+                                "Malo": "#C0392B"},
+            category_orders={"Calidad": ["Bueno", "Moderado", "Malo"]},
+            labels={"E.coli": "E. coli por 100 mL (escala logarítmica)"},
+        )
+        fig.update_layout(barmode="overlay")
+        fig.add_hline(y=200, line_dash="dash", line_color="#E0A030")
+        fig.add_hline(y=1000, line_dash="dash", line_color="#C0392B")
+        fig.update_yaxes(range=[0, math.ceil(math.log10(tope))])
+
+        for valor, color in [(200, "#B7791F"), (1000, "#C0392B")]:
+            fig.add_annotation(
+                x=1, xref="paper", y=math.log10(valor), yref="y",
+                text=str(valor), showarrow=False,
+                xanchor="right", yanchor="bottom", font=dict(color=color),
+            )
+
+        st.plotly_chart(fig, use_container_width=True)
+
         tabla = pd.DataFrame({
             "Fecha": sc["Fecha"].dt.strftime("%d-%m-%Y"),
             "E. coli (por 100 mL)": sc["E.coli"],
