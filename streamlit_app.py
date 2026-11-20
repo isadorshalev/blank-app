@@ -573,6 +573,31 @@ def texto_ecoli(valor):
         'Sobre 1.000 colonias, el agua es peligrosa para el contacto humano.</p>'
     )
 
+def fila_indice(sitio, v, clase, etiqueta):
+    if v is None:
+        centro = "<div></div>"
+        pill = '<span style="font-size:13px;color:#4A5B63;">Sin datos</span>'
+        mes = ""
+    else:
+        ancho = min(v / 25, 1) * 100
+        ticks = "".join(
+            f'<i style="position:absolute;top:-2px;left:{p}%;width:2px;height:16px;background:#9DBB9D;"></i>'
+            for p in (44, 68, 88))
+        centro = ('<div style="position:relative;height:12px;background:#EAF0EA;border-radius:99px;">'
+                  f'<div style="width:{ancho}%;height:100%;background:{COLOR_CLASE_BARRA[clase]};'
+                  f'border-radius:99px;"></div>{ticks}</div>')
+        bg = dict((c[0], c[2]) for c in CLASES)[clase]
+        pill = (f'<span style="display:inline-block;background:{bg};color:#1B2A33;font-size:13px;'
+                f'font-weight:600;border-radius:99px;padding:3px 12px;white-space:nowrap;">'
+                f'{clase} · {fmt(v, 0)}</span>')
+        mes = etiqueta
+    return (
+        '<div style="display:grid;grid-template-columns:minmax(110px,150px) 1fr auto 120px;gap:12px;'
+        'align-items:center;padding:9px 0;border-bottom:1px solid #EEF3EE;">'
+        f'<span class="titulo" style="font-size:17px;font-weight:700;">{sitio}</span>'
+        f'{centro}{pill}'
+        f'<span style="font-size:13px;color:#4A5B63;text-align:right;">{mes}</span></div>')
+
 # ---------- CARGA ----------
 df = load_all()
 dfc = load_coli()
@@ -636,6 +661,52 @@ with tab1:
                     st.markdown(medidor(valor), unsafe_allow_html=True)
                     st.caption(f"E. coli: {valor:,.0f} /100 mL".replace(",", "."))
 
+    # ----- última fila: sitio con solo E. coli + índices de macroinvertebrados -----
+    SOLO_ECOLI = "Catrico Pedro Montt"
+    ult_macro = (dfm_i.dropna(subset=["Indice"])
+                      .sort_values("Fecha")
+                      .groupby("Sitio")
+                      .tail(1)
+                      .set_index("Sitio"))
+
+    col_pm, col_idx = st.columns([1, 2])
+
+    with col_pm:
+        with st.container(border=True):
+            foto(SOLO_ECOLI)
+            tiene_pm = SOLO_ECOLI in ultimo_coli.index
+            v_pm = ultimo_coli.loc[SOLO_ECOLI, "E.coli"] if tiene_pm else None
+            est_pm = clasificar(v_pm) if tiene_pm else "Sin datos"
+
+            st.markdown(
+                '<div style="display:flex;justify-content:space-between;'
+                'align-items:center;gap:8px;flex-wrap:wrap;">'
+                '<span class="titulo" style="font-size:20px;'
+                f'font-weight:700;">{SOLO_ECOLI}</span>'
+                f'{badge_calidad(est_pm)}</div>',
+                unsafe_allow_html=True)
+
+            if tiene_pm:
+                f_pm = ultimo_coli.loc[SOLO_ECOLI, "Fecha"]
+                st.caption(f"Último muestreo: {f_pm:%d-%m-%Y}")
+                st.markdown(medidor(v_pm), unsafe_allow_html=True)
+                st.caption(f"E. coli: {v_pm:,.0f} /100 mL".replace(",", "."))
+            st.caption("En este sitio solo se mide E. coli.")
+
+    with col_idx:
+        with st.container(border=True):
+            st.markdown("**Índice de macroinvertebrados de cada sitio**")
+            st.caption("Último muestreo de cada sitio · Pobre < 11 · Regular 11–16 · "
+                       "Bueno 17–22 · Excelente > 22")
+            filas = ""
+            for s in ultimo.index:
+                if s in ult_macro.index:
+                    r = ult_macro.loc[s]
+                    filas += fila_indice(s, r["Indice"], clase_indice(r["Indice"]), etiqueta_mes(r))
+                else:
+                    filas += fila_indice(s, None, None, "")
+            st.markdown(filas, unsafe_allow_html=True)
+
     st.subheader("Mapa de los humedales")
     puntos = pd.DataFrame(
         [{"Sitio": s, "lat": c[0], "lon": c[1]}
@@ -661,6 +732,9 @@ with tab1:
             get_size=14,
             get_color=[27, 42, 51, 255],
             get_pixel_offset=[0, -16],
+            font_family='"\'Baloo 2\', sans-serif"',
+            font_weight=700,
+            character_set='"auto"',
         )
         vista = pdk.ViewState(
             latitude=puntos["lat"].mean(),
@@ -671,7 +745,8 @@ with tab1:
             pdk.Deck(
                 layers=[capa, etiquetas],
                 initial_view_state=vista,
-                tooltip={"text": "{Sitio}"},
+                tooltip={"text": "{Sitio}",
+                         "style": {"fontFamily": "'Baloo 2', sans-serif", "fontSize": "14px"}},
                 map_style="light",
             ),
             use_container_width=True,
