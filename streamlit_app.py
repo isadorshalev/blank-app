@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import pydeck as pdk
 import streamlit as st
+from PIL import Image, ImageOps
 
 st.set_page_config(page_title="Red de Monitoreo de Humedales", page_icon="🌿", layout="wide")
 
@@ -20,8 +21,8 @@ h1, h2, h3, h4 { font-family: 'Baloo 2', sans-serif !important; font-weight: 700
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Red de Monitoreo de Humedales de Valdivia")
-st.caption("Monitoreo del agua de siete sitios de los humedales de Valdivia.")
+st.title("Red de Monitoreo Comunitario del Santuario de la Naturaleza Humedales de Angachilla")
+st.caption("Monitoreo del agua en siete sitios del Santuario.")
 
 # ---------- LINKS: físico-químico ----------
 SITES = {
@@ -288,11 +289,12 @@ GRUPOS = {
     3: ("tolerantes", "#CBE8B8", "#1F4D2B"),
 }
 
-CLASES = [("Pobre", "menos de 11", "#E8A04A"), ("Regular", "11 a 16", "#F6E7B0"),
-          ("Bueno", "17 a 22", "#DDEBC9"), ("Excelente", "más de 22", "#BFE0CB")]
-COLOR_CLASE_TXT = {"Pobre": "#B5651D", "Regular": "#8A6D00", "Bueno": "#3F7A2B", "Excelente": "#1F6B4A"}
-COLOR_CLASE_BARRA = {"Pobre": "#D9822B", "Regular": "#E3C14A", "Bueno": "#7DB66B", "Excelente": "#3E8B5A"}
-
+CLASES = [("Pobre", "menos de 11", "#C0392B"), ("Regular", "11 a 16", "#E0A030"),
+          ("Bueno", "17 a 22", "#7DB66B"), ("Excelente", "más de 22", "#2F7D52")]
+# text color to use on top of each class color (white on the dark red and dark green)
+TXT_CLASE = {"Pobre": "#FFFFFF", "Regular": "#1B2A33", "Bueno": "#1B2A33", "Excelente": "#FFFFFF"}
+COLOR_CLASE_TXT = {"Pobre": "#C0392B", "Regular": "#B7791F", "Bueno": "#4F8F2F", "Excelente": "#1F6B4A"}
+COLOR_CLASE_BARRA = {"Pobre": "#C0392B", "Regular": "#E0A030", "Bueno": "#7DB66B", "Excelente": "#2F7D52"}
 
 def _txt(x):
     return " ".join(str(x).split()) if pd.notna(x) else ""
@@ -439,8 +441,7 @@ def tiles_clase(clase):
         sel = nombre == clase
         borde = "3px solid #1B2A33" if sel else "3px solid transparent"
         h += (f'<div style="flex:1;background:{color};border:{borde};opacity:{1 if sel else 0.55};'
-              f'border-radius:14px;padding:10px 6px;text-align:center;color:#1B2A33;">'
-              f'<div style="font-weight:700;font-size:16px;">{nombre}</div>'
+              f'border-radius:14px;padding:10px 6px;text-align:center;color:{TXT_CLASE[nombre]};">'
               f'<div style="font-size:13px;">{rango}</div></div>')
     return f'<div style="display:flex;gap:10px;">{h}</div>'
 
@@ -499,15 +500,28 @@ def diagnostico_macro(sitio):
             "'Indice acumulado número'.")
 
 
+
 def foto_taxon(taxon, g):
-    ruta = f"fotos_macro/{slug(taxon)}.jpg"
-    if os.path.exists(ruta):
-        st.image(ruta, use_container_width=True)
-    else:
-        st.markdown(
-            '<div style="height:110px;border-radius:10px;background:#EAF2EA;display:flex;'
-            'align-items:center;justify-content:center;color:#2B4A38;font-size:13px;">Foto pendiente</div>',
-            unsafe_allow_html=True)
+    path = f"fotos_macro/{slug(taxon)}.jpg"
+
+    if os.path.exists(path):
+        img = Image.open(path).convert("RGB")
+
+        # Resize while preserving the original proportions
+        img.thumbnail((360, 360))
+
+        # Create a consistent white square background
+        canvas = Image.new("RGB", (400, 400), "white")
+
+        # Center the organism without cropping
+        x = (400 - img.width) // 2
+        y = (400 - img.height) // 2
+
+        canvas.paste(img, (x, y))
+
+        st.image(canvas, width=250)
+
+from pathlib import Path
 
 # ---------- PANEL E. COLI ----------
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
@@ -586,16 +600,16 @@ def fila_indice(sitio, v, clase, etiqueta):
         centro = ('<div style="position:relative;height:12px;background:#EAF0EA;border-radius:99px;">'
                   f'<div style="width:{ancho}%;height:100%;background:{COLOR_CLASE_BARRA[clase]};'
                   f'border-radius:99px;"></div>{ticks}</div>')
-        bg = dict((c[0], c[2]) for c in CLASES)[clase]
-        pill = (f'<span style="display:inline-block;background:{bg};color:#1B2A33;font-size:13px;'
+        bg = COLOR_CLASE_BARRA[clase]
+        pill = (f'<span style="display:inline-block;background:{bg};color:{TXT_CLASE[clase]};font-size:13px;'
                 f'font-weight:600;border-radius:99px;padding:3px 12px;white-space:nowrap;">'
                 f'{clase} · {fmt(v, 0)}</span>')
         mes = etiqueta
     return (
-        '<div style="display:grid;grid-template-columns:minmax(110px,150px) 1fr auto 120px;gap:12px;'
+        '<div style="display:grid;grid-template-columns:minmax(110px,150px) 1fr 140px 120px;gap:12px;'
         'align-items:center;padding:9px 0;border-bottom:1px solid #EEF3EE;">'
         f'<span class="titulo" style="font-size:17px;font-weight:700;">{sitio}</span>'
-        f'{centro}{pill}'
+        f'{centro}<div style="text-align:right;">{pill}</div>'
         f'<span style="font-size:13px;color:#4A5B63;text-align:right;">{mes}</span></div>')
 
 # ---------- CARGA ----------
@@ -609,13 +623,6 @@ tab1, tab2 = st.tabs(["Resumen", "Detalle por sitio"])
 # PESTAÑA 1: RESUMEN
 # =====================================================
 with tab1:
-    st.subheader("Indicadores clave (promedio)")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("pH", f"{df['PH'].mean():.1f}")
-    c2.metric("Temp. agua", f"{df['Temp(agua)'].mean():.1f} °C")
-    c3.metric("Oxígeno", f"{df['Promedio Oxigeno'].mean():.1f} mg/L")
-    c4.metric("Saturación", f"{df['Saturación Oxígeno (%)'].mean():.0f}%")
-
     st.subheader("Sitios")
 
     ultimo = (df.dropna(subset=["PH"])
@@ -629,8 +636,7 @@ with tab1:
                       .tail(1)
                       .set_index("Sitio"))
 
-    st.caption("E. coli por 100 mL · Bueno: < 200 · Moderado: 200–1000 · Malo: > 1000")
-
+#
     cols = st.columns(3)
     for i, (sitio, fila) in enumerate(ultimo.iterrows()):
         with cols[i % 3]:
@@ -764,20 +770,19 @@ with tab2:
         "Todo el período": None,
     }
 
-    a, b = st.columns(2)
+    def grafico_linea(col, titulo, serie):
+        col.write(titulo)
+        if serie.dropna().empty:
+            col.caption("Sin datos en este período")
+        else:
+            col.line_chart(serie)
+
+    a, _ = st.columns(2)
     todos = sorted(set(df["Sitio"]) | set(dfc["Sitio"]))
     sitio = a.selectbox("Elige un humedal", todos)
-    periodo = b.selectbox("Período", list(opciones.keys()), index=4)
-    meses = opciones[periodo]
 
-    if meses is None:
-        dff = df
-    else:
-        corte = df["Fecha"].max() - pd.DateOffset(months=meses)
-        dff = df[df["Fecha"] > corte]
-
-    # ----- tarjetas: última medición -----
-    st.subheader(f"Última medición – {sitio}")
+    # ===== 1. ÚLTIMA MEDICIÓN (tarjetas) =====
+    st.subheader(f"Monitoreo Físicoquimico – {sitio}")
     ult = (df[df["Sitio"] == sitio]
            .dropna(subset=["PH"])
            .sort_values("Fecha")
@@ -818,28 +823,13 @@ with tab2:
             tarjeta("Temp. del aire", f.get("Temp(aire)"), "°C", "Informativo"),
             unsafe_allow_html=True)
 
-    # ----- físico-químico -----
-    sd = dff[dff["Sitio"] == sitio].sort_values("Fecha").set_index("Fecha")
-
-    st.subheader(f"Parámetros físico-químicos – {sitio}")
-    if sd.empty:
-        st.info("No hay datos físico-químicos para este sitio en el período elegido.")
-    else:
-        g1, g2, g3 = st.columns(3)
-
-        g1.write("pH")
-        g1.line_chart(sd["PH"])
-
-        g2.write("Temperatura del agua (°C)")
-        g2.line_chart(sd["Temp(agua)"])
-
-        g3.write("Oxígeno (ppm)")
-        g3.line_chart(sd["Promedio Oxigeno"])
-
-    # ----- bacteriológico -----
+    # ===== 2. ANÁLISIS BACTERIOLÓGICO (panel con números) =====
     st.subheader(f"Análisis bacteriológico – {sitio}")
     c_sitio = dfc[dfc["Sitio"] == sitio].sort_values("Fecha")
-    if not c_sitio.empty:
+
+    if c_sitio.empty:
+        st.info("No hay datos bacteriológicos para este sitio.")
+    else:
         fechas_c = list(c_sitio["Fecha"].sort_values(ascending=False))
         etiquetas_c = {r["Fecha"]: etiqueta_mes(r) for _, r in c_sitio.iterrows()}
         fecha_c = st.selectbox("Mes de muestreo (E. coli)", fechas_c,
@@ -849,6 +839,88 @@ with tab2:
         valor_c = fila_c["E.coli"]
         st.markdown(panel_ecoli(valor_c, etiqueta_mes(fila_c)), unsafe_allow_html=True)
         st.markdown(texto_ecoli(valor_c), unsafe_allow_html=True)
+
+    # ===== 3. MACROINVERTEBRADOS (índice y organismos) =====
+    st.subheader(f"Macroinvertebrados – {sitio}")
+    mi = dfm_i[dfm_i["Sitio"] == sitio].dropna(subset=["Indice"]).sort_values("Fecha")
+
+    if mi.empty:
+        st.info("Aún no hay datos de macroinvertebrados para este sitio.")
+    else:
+        fechas_m = list(mi["Fecha"].sort_values(ascending=False))
+        etiquetas_m = {r["Fecha"]: etiqueta_mes(r) for _, r in mi.iterrows()}
+        fecha_sel = st.selectbox("Mes de muestreo", fechas_m,
+                                 format_func=lambda d: etiquetas_m[d].capitalize())
+        fila_m = mi[mi["Fecha"] == fecha_sel].iloc[0]
+        indice = fila_m["Indice"]
+        clase = clase_indice(indice)
+
+        tx = (dfm_t[(dfm_t["Sitio"] == sitio) & (dfm_t["Fecha"] == fecha_sel)]
+              .sort_values(["Grupo", "Cantidad"], ascending=[True, False]))
+        cuenta = tx["Grupo"].value_counts()
+        n = {g: int(cuenta.get(g, 0)) for g in (1, 2, 3)}
+
+        izq, der = st.columns([1, 2])
+        with izq:
+            st.markdown(numero_indice(indice, clase), unsafe_allow_html=True)
+        with der:
+            st.markdown(tiles_clase(clase), unsafe_allow_html=True)
+            st.markdown(frase_macro({g for g in n if n[g]}))
+
+        st.markdown("**Tipos de organismos por grupo de tolerancia y cálculo del índice**")
+        st.caption("Cada tipo de organismo encontrado suma 3 puntos si es del grupo 1, "
+                   "2 puntos si es del grupo 2 y 1 punto si es del grupo 3.")
+        st.markdown(barra_grupos(n), unsafe_allow_html=True)
+        if pd.notna(indice) and sum(n[g] * p for g, p in ((1, 3), (2, 2), (3, 1))) != indice:
+            st.caption(f"Nota: el índice registrado en la planilla es {indice:.0f}.")
+
+        if not tx.empty:
+            st.markdown("**Encontramos en este muestreo**")
+            for ini in range(0, len(tx), 4):
+                cols_m = st.columns(4)
+                for col, (_, t) in zip(cols_m, tx.iloc[ini:ini + 4].iterrows()):
+                    with col:
+                        with st.container(border=True):
+                            foto_taxon(t["Taxon"], int(t["Grupo"]))
+                            st.markdown(f"**{nombre_taxon(t['Taxon'])}**")
+                            st.markdown(
+                                badge_grupo(int(t["Grupo"]))
+                                + f' <span style="font-size:13px;color:#4A5B63;">× {int(t["Cantidad"])}</span>',
+                                unsafe_allow_html=True)
+
+        if str(fila_m["Obs"]).strip():
+            st.caption(f"Observaciones del muestreo: {fila_m['Obs']}")
+
+    # ===== 4. GRÁFICOS =====
+    st.subheader(f"Gráficos – {sitio}")
+    p, _ = st.columns(2)
+    periodo = p.selectbox("Período de los gráficos", list(opciones.keys()), index=4)
+    meses = opciones[periodo]
+
+    if meses is None:
+        dff = df
+    else:
+        corte = df["Fecha"].max() - pd.DateOffset(months=meses)
+        dff = df[df["Fecha"] > corte]
+
+    # ----- gráficos físico-químicos -----
+    st.markdown("**Gráficos de los parámetros físico-químicos**")
+    sd = dff[dff["Sitio"] == sitio].sort_values("Fecha").set_index("Fecha")
+
+    if sd.empty:
+        st.info("No hay datos físico-químicos para este sitio en el período elegido.")
+    else:
+        gf1 = st.columns(3)
+        gf2 = st.columns(3)
+        grafico_linea(gf1[0], "pH", sd["PH"])
+        grafico_linea(gf1[1], "Temperatura del agua (°C)", sd["Temp(agua)"])
+        grafico_linea(gf1[2], "Oxígeno (ppm)", sd["Promedio Oxigeno"])
+        grafico_linea(gf2[0], "Alcalinidad (mg/L)", sd["Alcalinidad"])
+        grafico_linea(gf2[1], "Turbidez (JTU)", sd["Turbidez"])
+        grafico_linea(gf2[2], "Temperatura del aire (°C)", sd["Temp(aire)"])
+
+    # ----- gráfico del E. coli -----
+    st.markdown("**Gráfico del E. coli**")
     st.caption("E. coli por 100 mL · Bueno: < 200 · Moderado: 200–1000 · Malo: > 1000")
 
     sc = dfc[dfc["Sitio"] == sitio]
@@ -891,61 +963,16 @@ with tab2:
 
         st.plotly_chart(fig, use_container_width=True)
 
-    # ----- macroinvertebrados -----
-    st.subheader(f"Macroinvertebrados – {sitio}")
-    mi = dfm_i[dfm_i["Sitio"] == sitio].dropna(subset=["Indice"]).sort_values("Fecha")
+    # ----- gráfico del índice de macroinvertebrados -----
+    st.markdown("**Gráfico del índice de macroinvertebrados**")
 
     if mi.empty:
         st.info("Aún no hay datos de macroinvertebrados para este sitio.")
-        with st.expander("Detalles técnicos (temporal)"):
-            st.write(diagnostico_macro(sitio))
     else:
-        fechas_m = list(mi["Fecha"].sort_values(ascending=False))
-        etiquetas_m = {r["Fecha"]: etiqueta_mes(r) for _, r in mi.iterrows()}
-        fecha_sel = st.selectbox("Mes de muestreo", fechas_m,
-                                 format_func=lambda d: etiquetas_m[d].capitalize())
-        fila_m = mi[mi["Fecha"] == fecha_sel].iloc[0]
-        indice = fila_m["Indice"]
-        clase = clase_indice(indice)
-
-        tx = (dfm_t[(dfm_t["Sitio"] == sitio) & (dfm_t["Fecha"] == fecha_sel)]
-              .sort_values(["Grupo", "Cantidad"], ascending=[True, False]))
-        cuenta = tx["Grupo"].value_counts()
-        n = {g: int(cuenta.get(g, 0)) for g in (1, 2, 3)}
-
-        izq, der = st.columns([1, 2])
-        with izq:
-            st.markdown(numero_indice(indice, clase), unsafe_allow_html=True)
-        with der:
-            st.markdown(tiles_clase(clase), unsafe_allow_html=True)
-            st.markdown(frase_macro({g for g in n if n[g]}))
-
-        st.markdown("**Tipos de organismos por grupo de tolerancia y cálculo del índice**")
-        st.caption("Cada tipo de organismo encontrado suma 3 puntos si es del grupo 1, "
-                   "2 puntos si es del grupo 2 y 1 punto si es del grupo 3.")
-        st.markdown(barra_grupos(n), unsafe_allow_html=True)
-        if pd.notna(indice) and sum(n[g] * p for g, p in ((1, 3), (2, 2), (3, 1))) != indice:
-            st.caption(f"Nota: el índice registrado en la planilla es {indice:.0f}.")
-        if not tx.empty:
-            st.markdown("**Encontramos en este muestreo**")
-            for ini in range(0, len(tx), 4):
-                cols_m = st.columns(4)
-                for col, (_, t) in zip(cols_m, tx.iloc[ini:ini + 4].iterrows()):
-                    with col:
-                        with st.container(border=True):
-                            foto_taxon(t["Taxon"], int(t["Grupo"]))
-                            st.markdown(f"**{nombre_taxon(t['Taxon'])}**")
-                            st.markdown(
-                                badge_grupo(int(t["Grupo"]))
-                                + f' <span style="font-size:13px;color:#4A5B63;">× {int(t["Cantidad"])}</span>',
-                                unsafe_allow_html=True)
-
-        if str(fila_m["Obs"]).strip():
-            st.caption(f"Observaciones del muestreo: {fila_m['Obs']}")
-
         hist = mi if meses is None else mi[mi["Fecha"] > df["Fecha"].max() - pd.DateOffset(months=meses)]
-        if not hist.empty:
-            st.markdown("**Historial del índice acumulado**")
+        if hist.empty:
+            st.info("No hay datos de macroinvertebrados en el período elegido.")
+        else:
             hist = hist.assign(Clase=hist["Indice"].apply(clase_indice))
             fig_m = px.bar(
                 hist, x="Fecha", y="Indice", color="Clase",
