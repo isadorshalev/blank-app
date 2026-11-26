@@ -5,6 +5,7 @@ import unicodedata
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
 from PIL import Image, ImageOps
@@ -82,14 +83,32 @@ def clean_site(url):
     alcalinidad = col_despues("Alcalinidad")
     turbidez = col_despues("Turbidez")
 
+    def col_por(cond):
+        """Columna cuyo encabezado cumple `cond`. Busca en los nombres y en las 3 primeras
+        filas, por si el encabezado ocupa dos filas en la planilla."""
+        norm = lambda x: " ".join(str(x).split()).lower()
+        for i, c in enumerate(df.columns):
+            if cond(norm(c)):
+                return df.iloc[:, i]
+        for fila in range(min(3, len(df))):
+            for i, v in enumerate(df.iloc[fila]):
+                if cond(norm(v)):
+                    return df.iloc[:, i]
+        return None
+
+    mes_eq = col_por(lambda t: "mes" in t and "equiv" in t)
+    anio_eq = col_por(lambda t: "año" in t and "equiv" in t)
+
     df = df[[c for c in KEEP if c in df.columns]].copy()
     df["Alcalinidad"] = alcalinidad if alcalinidad is not None else float("nan")
     df["Turbidez"] = turbidez if turbidez is not None else float("nan")
+    df["MesEq"] = mes_eq.astype(str).str.strip() if mes_eq is not None else ""
+    df["AnioEq"] = anio_eq if anio_eq is not None else float("nan")
 
-    df["Fecha"] = pd.to_datetime(df["Fecha"], dayfirst=True, errors="coerce")
+    df["Fecha"] = pd.to_datetime(df["Fecha"], dayfirst=True, errors="coerce", format="mixed")
     df = df.dropna(subset=["Fecha"])
     for col in df.columns:
-        if col != "Fecha":
+        if col not in ("Fecha", "MesEq"):
             df[col] = pd.to_numeric(
                 df[col].astype(str).str.replace(",", ".", regex=False),
                 errors="coerce")
@@ -128,13 +147,16 @@ def clean_coli(url):
 
     datos = raw.loc[h + 1:]
     d = pd.DataFrame({
-        "Fecha": pd.to_datetime(datos[c_fecha], dayfirst=True, errors="coerce"),
+        "Fecha": pd.to_datetime(datos[c_fecha], dayfirst=True, errors="coerce", format="mixed"),
         "E.coli": pd.to_numeric(
             datos[c_ecoli].str.replace(",", ".", regex=False), errors="coerce"),
         "MesEq": datos[c_mes].str.strip() if c_mes is not None else "",
         "AnioEq": (pd.to_numeric(datos[c_anio], errors="coerce")
                    if c_anio is not None else float("nan")),
     })
+    # Si las tarjetas 1, 2 y 3 están vacías, la muestra aún no se analiza: no es un 0
+    tarjetas = datos[[c_ecoli - 3, c_ecoli - 2, c_ecoli - 1]]
+    d = d[tarjetas.notna().any(axis=1)]
     return d.dropna(subset=["Fecha", "E.coli"])
 
 
@@ -285,8 +307,8 @@ NOMBRES = {
 # grupo: (nombre, color de fondo, color de texto)
 GRUPOS = {
     1: ("sensibles", "#3A7D52", "#FFFFFF"),
-    2: ("intermedios", "#7CBF86", "#1B2A33"),
-    3: ("tolerantes", "#CBE8B8", "#1F4D2B"),
+    2: ("tolerantes", "#7CBF86", "#1B2A33"),
+    3: ("resistentes", "#CBE8B8", "#1F4D2B"),
 }
 
 CLASES = [("Pobre", "menos de 11", "#C0392B"), ("Regular", "11 a 16", "#E0A030"),
@@ -334,7 +356,7 @@ def clean_macro(url):
     c_txt = donde(lambda t: "acumulado" in t and "texto" in t)
     c_obs = donde(lambda t: t.replace(" ", "").startswith("observaci"))
     c_mes = donde(lambda t: "mes equivalente" in t)
-    c_anio = donde(lambda t: "año" in t)
+    c_anio = donde(lambda t: "año" in t and "equiv" in t)
     if not (c_idx and c_txt):
         # encabezados con otro nombre: usar las columnas "índice" y decidir por los datos
         cols_i = donde(lambda t: "ndice" in t)
@@ -353,7 +375,7 @@ def clean_macro(url):
             f"Esperaba 3 columnas 'Total N°Individuo' después del índice y encontré {len(totales)}. "
             f"Encabezados de esa fila: {[c for c in nom if c][:25]}")
 
-    fechas = pd.to_datetime(datos[c_fecha[0]], dayfirst=True, errors="coerce")
+    fechas = pd.to_datetime(datos[c_fecha[0]], dayfirst=True, errors="coerce", format="mixed")
     ok = fechas.notna()
     datos, fechas = datos[ok], fechas[ok]
 
@@ -571,12 +593,70 @@ MESES_ABR = {"ene": "enero", "feb": "febrero", "mar": "marzo", "abr": "abril", "
 
 
 def etiqueta_mes(fila):
-    mes = MESES_ABR.get(str(fila.get("MesEq", "")).strip().lower()[:3])
-    if mes is None:
-        mes = MESES[fila["Fecha"].month - 1]
+    anio, mes = clave_mes(fila)
+    return f"{MESES[mes - 1]} {anio}"
+
+def clave_mes(fila):
+    """(año, mes) al que pertenece el muestreo, según 'Mes equivalente' y 'Año equivalente'.
+    Si faltan, usa la Fecha."""
+    v = str(fila.get("MesEq", "")).strip().lower()
+    if v.replace(".0", "").isdigit() and 1 <= int(float(v)) <= 12:
+        mes = int(float(v))
+    else:
+        nombre = MESES_ABR.get(v[:3])
+        mes = MESES.index(nombre) + 1 if nombre else fila["Fecha"].month
     anio = fila.get("AnioEq")
     anio = int(anio) if pd.notna(anio) else fila["Fecha"].year
-    return f"{mes} {anio}"
+    return (anio, mes)
+
+
+def meses_sin_datos(c_sitio):
+    """Fechas (día 28) de los meses sin ninguna medición entre la primera y la última."""
+    claves = [clave_mes(r) for _, r in c_sitio.iterrows()]
+    if not claves:
+        return []
+    presentes = set(claves)
+    a, m = min(claves)
+    fin = max(claves)
+    faltan = []
+    while (a, m) <= fin:
+        if (a, m) not in presentes:
+            faltan.append(pd.Timestamp(year=a, month=m, day=28))
+        m += 1
+        if m > 12:
+            a, m = a + 1, 1
+    return faltan
+
+
+def con_mes(d):
+    """Agrega la columna 'Mes': primer día del mes equivalente de cada muestreo."""
+    d = d.copy()
+    d["Mes"] = pd.to_datetime([pd.Timestamp(year=a, month=m, day=1)
+                               for a, m in (clave_mes(r) for _, r in d.iterrows())])
+    return d
+
+
+def nombre_mes(ts):
+    return f"{MESES[ts.month - 1]} {ts.year}"
+
+
+def recorte(d, meses, fin):
+    """Deja los últimos `meses` meses equivalentes, contando hacia atrás desde `fin`."""
+    if meses is None or d.empty:
+        return d
+    return d[d["Mes"] >= fin - pd.DateOffset(months=meses - 1)]
+
+
+def un_dato_por_mes(d):
+    """Si dos muestreos caen en el mismo mes equivalente, deja el más reciente."""
+    return d.sort_values("Fecha").drop_duplicates("Mes", keep="last")
+
+
+def eje_meses(d):
+    """Todos los meses entre el primero y el último con datos (incluye meses sin datos)."""
+    if d.empty:
+        return []
+    return list(pd.date_range(d["Mes"].min(), d["Mes"].max(), freq="MS"))
 
 def texto_ecoli(valor):
     clase = clasificar(valor)
@@ -616,6 +696,7 @@ def fila_indice(sitio, v, clase, etiqueta):
 df = load_all()
 dfc = load_coli()
 dfm_i, dfm_t = load_macro()
+df, dfc, dfm_i = con_mes(df), con_mes(dfc), con_mes(dfm_i)
 
 tab1, tab2 = st.tabs(["Resumen", "Detalle por sitio"])
 
@@ -770,12 +851,29 @@ with tab2:
         "Todo el período": None,
     }
 
-    def grafico_linea(col, titulo, serie):
+    def grafico_linea(col, titulo, sd, columna, meses_x):
         col.write(titulo)
-        if serie.dropna().empty:
+        serie = sd.set_index("Mes")[columna].dropna()
+        if serie.empty:
             col.caption("Sin datos en este período")
-        else:
-            col.line_chart(serie)
+            return
+        etiquetas = [nombre_mes(m) for m in meses_x]
+        fig = go.Figure(go.Scatter(
+            x=etiquetas,
+            y=[serie.get(m) for m in meses_x],
+            mode="lines+markers", connectgaps=False,
+            line=dict(color="#2F6B4F", width=2),
+            hovertemplate="%{x}: %{y}<extra></extra>"))
+        # --- marca "S/D" en los meses sin dato de este parámetro ---
+        for m, x in zip(meses_x, etiquetas):
+            if m not in serie.index:
+                fig.add_annotation(
+                    x=x, xref="x", y=0, yref="paper",
+                    text="<b>S/D</b>", showarrow=False,
+                    yanchor="bottom", yshift=3, font=dict(size=11, color="#6B7B72"))
+        fig.update_xaxes(type="category")
+        fig.update_layout(height=260, margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
+        col.plotly_chart(fig, use_container_width=True, key=f"linea_{columna}")
 
     a, _ = st.columns(2)
     todos = sorted(set(df["Sitio"]) | set(dfc["Sitio"]))
@@ -897,62 +995,71 @@ with tab2:
     periodo = p.selectbox("Período de los gráficos", list(opciones.keys()), index=4)
     meses = opciones[periodo]
 
-    if meses is None:
-        dff = df
-    else:
-        corte = df["Fecha"].max() - pd.DateOffset(months=meses)
-        dff = df[df["Fecha"] > corte]
-
     # ----- gráficos físico-químicos -----
     st.markdown("**Gráficos de los parámetros físico-químicos**")
-    sd = dff[dff["Sitio"] == sitio].sort_values("Fecha").set_index("Fecha")
+    st.caption("**S/D**: sin datos de ese mes")
+    sd = un_dato_por_mes(recorte(df[df["Sitio"] == sitio], meses, df["Mes"].max()))
 
     if sd.empty:
         st.info("No hay datos físico-químicos para este sitio en el período elegido.")
     else:
+        meses_fq = eje_meses(sd)
         gf1 = st.columns(3)
         gf2 = st.columns(3)
-        grafico_linea(gf1[0], "pH", sd["PH"])
-        grafico_linea(gf1[1], "Temperatura del agua (°C)", sd["Temp(agua)"])
-        grafico_linea(gf1[2], "Oxígeno (ppm)", sd["Promedio Oxigeno"])
-        grafico_linea(gf2[0], "Alcalinidad (mg/L)", sd["Alcalinidad"])
-        grafico_linea(gf2[1], "Turbidez (JTU)", sd["Turbidez"])
-        grafico_linea(gf2[2], "Temperatura del aire (°C)", sd["Temp(aire)"])
+        grafico_linea(gf1[0], "pH", sd, "PH", meses_fq)
+        grafico_linea(gf1[1], "Temperatura del agua (°C)", sd, "Temp(agua)", meses_fq)
+        grafico_linea(gf1[2], "Oxígeno (ppm)", sd, "Promedio Oxigeno", meses_fq)
+        grafico_linea(gf2[0], "Alcalinidad (mg/L)", sd, "Alcalinidad", meses_fq)
+        grafico_linea(gf2[1], "Turbidez (JTU)", sd, "Turbidez", meses_fq)
+        grafico_linea(gf2[2], "Temperatura del aire (°C)", sd, "Temp(aire)", meses_fq)
 
     # ----- gráfico del E. coli -----
     st.markdown("**Gráfico del E. coli**")
     st.caption("E. coli por 100 mL · Bueno: < 200 · Moderado: 200–1000 · Malo: > 1000")
 
-    sc = dfc[dfc["Sitio"] == sitio]
-    if meses is not None and not dfc.empty:
-        sc = sc[sc["Fecha"] > dfc["Fecha"].max() - pd.DateOffset(months=meses)]
-    sc = sc.sort_values("Fecha")
+    sc = un_dato_por_mes(recorte(dfc[dfc["Sitio"] == sitio], meses, dfc["Mes"].max()))
 
     if sc.empty:
         st.info("No hay datos bacteriológicos para este sitio en el período elegido.")
     else:
+        meses_c = eje_meses(sc)
+        orden = [nombre_mes(m) for m in meses_c]
         graf = sc[sc["E.coli"] > 0].copy()
-        if len(graf) < len(sc):
-            st.caption("Los valores de 0 no se pueden mostrar en escala logarítmica.")
-
+        graf["MesTxt"] = graf["Mes"].map(nombre_mes)
         graf["Calidad"] = graf["E.coli"].apply(clasificar)
+        st.caption("**0**: no se encontraron colonias · **S/D**: sin datos de ese mes")
 
         tope = max(graf["E.coli"].max() if not graf.empty else 0, 1000)
 
         fig = px.bar(
-            graf, x="Fecha", y="E.coli", log_y=True,
+            graf, x="MesTxt", y="E.coli", log_y=True,
             color="Calidad",
             color_discrete_map={"Bueno": "#2E8B57",
                                 "Moderado": "#E0A030",
                                 "Malo": "#C0392B"},
-            category_orders={"Calidad": ["Bueno", "Moderado", "Malo"]},
-            labels={"E.coli": "E. coli por 100 mL (escala logarítmica)"},
+            category_orders={"MesTxt": orden, "Calidad": ["Bueno", "Moderado", "Malo"]},
+            labels={"E.coli": "E. coli por 100 mL (escala logarítmica)", "MesTxt": ""},
+            hover_data={"Fecha": "|%d-%m-%Y", "MesTxt": False},
         )
         fig.update_layout(barmode="overlay")
-        fig.update_traces(width=BARRA_MS)
+        # traza invisible para que aparezcan todos los meses, aunque no tengan barra
+        fig.add_trace(go.Scatter(x=orden, y=[None] * len(orden), mode="markers",
+                                 showlegend=False, hoverinfo="skip"))
+        fig.update_xaxes(type="category", categoryorder="array", categoryarray=orden)
         fig.add_hline(y=200, line_dash="dash", line_color="#E0A030")
         fig.add_hline(y=1000, line_dash="dash", line_color="#C0392B")
         fig.update_yaxes(range=[0, math.ceil(math.log10(tope))])
+
+        # --- marcas "0" y "S/D" sobre el eje ---
+        con_datos = set(sc["Mes"])
+        marcas = [(nombre_mes(m), "0", "#2E8B57") for m in sc.loc[sc["E.coli"] == 0, "Mes"]]
+        marcas += [(nombre_mes(m), "S/D", "#6B7B72") for m in meses_c if m not in con_datos]
+        for x, texto, color_m in marcas:
+            fig.add_annotation(
+                x=x, xref="x", y=0, yref="y",
+                text=f"<b>{texto}</b>", showarrow=False,
+                yanchor="bottom", yshift=3, font=dict(size=14, color=color_m),
+            )
 
         for valor_linea, color in [(200, "#B7791F"), (1000, "#C0392B")]:
             fig.add_annotation(
@@ -965,21 +1072,39 @@ with tab2:
 
     # ----- gráfico del índice de macroinvertebrados -----
     st.markdown("**Gráfico del índice de macroinvertebrados**")
+    st.caption("**0**: no se encontraron organismos · **S/D**: sin datos de ese mes")
 
     if mi.empty:
         st.info("Aún no hay datos de macroinvertebrados para este sitio.")
     else:
-        hist = mi if meses is None else mi[mi["Fecha"] > df["Fecha"].max() - pd.DateOffset(months=meses)]
+        hist = un_dato_por_mes(recorte(mi, meses, dfm_i["Mes"].max()))
         if hist.empty:
             st.info("No hay datos de macroinvertebrados en el período elegido.")
         else:
-            hist = hist.assign(Clase=hist["Indice"].apply(clase_indice))
+            orden_m = [nombre_mes(m) for m in eje_meses(hist)]
+            hist = hist.assign(Clase=hist["Indice"].apply(clase_indice),
+                               MesTxt=hist["Mes"].map(nombre_mes))
             fig_m = px.bar(
-                hist, x="Fecha", y="Indice", color="Clase",
+                hist, x="MesTxt", y="Indice", color="Clase",
                 color_discrete_map=COLOR_CLASE_BARRA,
-                category_orders={"Clase": [c[0] for c in CLASES]},
-                labels={"Indice": "Índice acumulado"},
+                category_orders={"MesTxt": orden_m, "Clase": [c[0] for c in CLASES]},
+                labels={"Indice": "Índice acumulado", "MesTxt": ""},
+                hover_data={"Fecha": "|%d-%m-%Y", "MesTxt": False},
             )
             fig_m.update_layout(barmode="overlay")
-            fig_m.update_traces(width=BARRA_MS)
+            fig_m.add_trace(go.Scatter(x=orden_m, y=[None] * len(orden_m), mode="markers",
+                                       showlegend=False, hoverinfo="skip"))
+            fig_m.update_xaxes(type="category", categoryorder="array", categoryarray=orden_m)
+            # --- marcas "0" y "S/D" sobre el eje ---
+            con_datos_m = set(hist["Mes"])
+            marcas_m = [(nombre_mes(m), "0", "#C0392B")
+                        for m in hist.loc[hist["Indice"] == 0, "Mes"]]
+            marcas_m += [(x, "S/D", "#6B7B72")
+                         for m, x in zip(eje_meses(hist), orden_m) if m not in con_datos_m]
+            for x, texto, color_m in marcas_m:
+                fig_m.add_annotation(
+                    x=x, xref="x", y=0, yref="y",
+                    text=f"<b>{texto}</b>", showarrow=False,
+                    yanchor="bottom", yshift=3, font=dict(size=14, color=color_m),
+                )
             st.plotly_chart(fig_m, use_container_width=True)
